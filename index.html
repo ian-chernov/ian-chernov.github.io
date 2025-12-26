@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>Map Editor (Markers + 3 Colors)</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.15.0/dist/leaflet-geoman.css" />
+
+<style>
+  body { margin: 0; font-family: sans-serif; }
+  #map { height: 100vh; }
+
+  #topbar {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 1000;
+    background: white;
+    padding: 6px;
+    border-radius: 4px;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .pm-hidden-marker { display: none; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <select id="markerSelect"></select>
+
+  <select id="colorSelect">
+    <option value="#0066ff">Blue</option>
+    <option value="#e53935">Red</option>
+    <option value="#000000">Black</option>
+  </select>
+
+  <button id="exportBtn">Export</button>
+  <input type="file" id="importInput" accept=".json,.geojson" />
+</div>
+
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.15.0/dist/leaflet-geoman.min.js"></script>
+
+<script>
+/* ===================== UTIL ===================== */
+function svgToDataUrl(svg) {
+  return "data:image/svg+xml;base64," + btoa(svg);
+}
+
+function colorizeSvg(svg, color) {
+  return svg
+    .replace(/stroke=\"currentColor\"/g, `stroke="${color}"`)
+    .replace(/fill=\"currentColor\"/g, `fill="${color}"`);
+}
+
+/* ===================== MAP ===================== */
+const map = L.map("map").setView([0, 0], 2);
+
+L.tileLayer(
+  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+  { attribution: "© OpenStreetMap © CARTO" }
+).addTo(map);
+
+const drawnLayers = L.featureGroup().addTo(map);
+
+/* ===================== GEOMAN ===================== */
+map.pm.addControls({
+  position: "topleft",
+  drawMarker: true,
+  drawPolyline: true,
+  drawPolygon: true,
+  drawCircle: true,
+  drawCircleMarker: false,
+  drawRectangle: false,
+  editMode: true,
+  dragMode: true,
+  cutPolygon: true,
+  removalMode: true
+});
+
+// hide blue preview marker
+map.pm.setGlobalOptions({
+  markerStyle: {
+    icon: L.divIcon({ className: "pm-hidden-marker" })
+  }
+});
+
+/* ===================== COLORS ===================== */
+let currentColor = "#0066ff";
+
+function applyDrawColor() {
+  map.pm.setGlobalOptions({
+    pathOptions: {
+      color: currentColor,
+      fillColor: currentColor,
+      weight: 3,
+      fillOpacity: 0.3
+    }
+  });
+}
+
+document.getElementById("colorSelect").onchange = e => {
+  currentColor = e.target.value;
+  applyDrawColor();
+};
+
+applyDrawColor();
+
+/* ===================== MARKERS ===================== */
+const markerMap = {};
+let currentMarkerId = null;
+
+async function loadMarkers() {
+  const res = await fetch("markers.json");
+  const markers = await res.json();
+
+  const select = document.getElementById("markerSelect");
+
+  markers.forEach(m => {
+    markerMap[m.id] = m;
+
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.title;
+    select.appendChild(opt);
+  });
+
+  currentMarkerId = markers[0].id;
+  select.value = currentMarkerId;
+  select.onchange = e => currentMarkerId = e.target.value;
+}
+
+/* ===================== CREATE ===================== */
+map.on("pm:create", e => {
+  const layer = e.layer;
+
+  // MARKER
+  if (e.shape === "Marker") {
+    const ll = layer.getLatLng();
+    const m = markerMap[currentMarkerId];
+
+    const coloredSvg = colorizeSvg(m.svg, currentColor);
+
+    const icon = L.icon({
+      iconUrl: svgToDataUrl(coloredSvg),
+      iconSize: m.size,
+      iconAnchor: m.anchor
+    });
+
+    const marker = L.marker(ll, { icon });
+
+    marker.feature = {
+      type: "Feature",
+      geometry: {
+        type: "Point",
+        coordinates: [ll.lng, ll.lat]
+      },
+      properties: {
+        markerId: m.id,
+        svg: m.svg,          // template
+        color: currentColor,
+        size: m.size,
+        anchor: m.anchor
+      }
+    };
+
+    drawnLayers.addLayer(marker);
+    map.removeLayer(layer);
+    return;
+  }
+
+  // VECTORS
+  if (layer.setStyle) {
+    layer.setStyle({
+      color: currentColor,
+      fillColor: currentColor
+    });
+
+    const geo = layer.toGeoJSON();
+    geo.properties = geo.properties || {};
+    geo.properties.color = currentColor;
+    layer.feature = geo;
+  }
+
+  drawnLayers.addLayer(layer);
+});
+
+/* ===================== EXPORT ===================== */
+exportBtn.onclick = () => {
+  const features = [];
+  drawnLayers.eachLayer(l => features.push(l.feature ?? l.toGeoJSON()));
+
+  const blob = new Blob(
+    [JSON.stringify({ type: "FeatureCollection", features }, null, 2)],
+    { type: "application/json" }
+  );
+
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "map.geojson";
+  a.click();
+};
+
+/* ===================== IMPORT ===================== */
+importInput.onchange = e => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = () => {
+    drawnLayers.clearLayers();
+    const geojson = JSON.parse(reader.result);
+
+    geojson.features.forEach(f => {
+      // MARKER
+      if (f.geometry.type === "Point" && f.properties?.svg) {
+        const coloredSvg = colorizeSvg(
+          f.properties.svg,
+          f.properties.color || "#000000"
+        );
+
+        const icon = L.icon({
+          iconUrl: svgToDataUrl(coloredSvg),
+          iconSize: f.properties.size,
+          iconAnchor: f.properties.anchor
+        });
+
+        const marker = L.marker(
+          [f.geometry.coordinates[1], f.geometry.coordinates[0]],
+          { icon }
+        );
+        marker.feature = f;
+        drawnLayers.addLayer(marker);
+        return;
+      }
+
+      // VECTORS
+      L.geoJSON(f, {
+        onEachFeature: (feature, layer) => {
+          if (layer.setStyle && feature.properties?.color) {
+            layer.setStyle({
+              color: feature.properties.color,
+              fillColor: feature.properties.color
+            });
+          }
+          layer.feature = feature;
+          drawnLayers.addLayer(layer);
+        }
+      });
+    });
+  };
+  reader.readAsText(file);
+};
+
+/* ===================== INIT ===================== */
+loadMarkers();
+</script>
+
+</body>
+</html>
