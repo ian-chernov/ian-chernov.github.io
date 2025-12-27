@@ -1,8 +1,8 @@
-<!DOCTYPE html>  
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<title>Map Editor (Markers + 3 Colors)</title>
+<title>Map Editor (Markers + Colors + Multiple Maps)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <link rel="stylesheet" href="https://unpkg.com/@geoman-io/leaflet-geoman-free@2.15.0/dist/leaflet-geoman.css" />
@@ -11,19 +11,20 @@
   body { margin: 0; font-family: sans-serif; }
   #map { height: 100vh; }
 
-  #topbar {
-    position: absolute;
-    top: 10px;
-    right: 10px;
-    z-index: 1000;
-    background: white;
-    padding: 6px;
-    border-radius: 4px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
+ #topbar {
+  position: absolute;
+  top: 10px;
+  right: 60px; /* <-- key change */
+  z-index: 1000;
+  background: white;
+  padding: 6px;
+  border-radius: 4px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 
   .pm-hidden-marker { display: none; }
 </style>
@@ -63,11 +64,72 @@ function colorizeSvg(svg, color) {
 /* ===================== MAP ===================== */
 const map = L.map("map").setView([0, 0], 2);
 
-L.tileLayer(
-  "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
-  { attribution: "© OpenStreetMap © CARTO" }
+/* ---------- BASE MAPS ---------- */
+const osm = L.tileLayer(
+  "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom: 19, attribution: "© OpenStreetMap" }
+);
+
+const sentinel = L.tileLayer(
+  "https://tiles.maps.eox.at/wmts?service=WMTS&request=GetTile" +
+  "&version=1.0.0&layer=s2cloudless-2020_3857&style=default" +
+  "&tilematrixset=GoogleMapsCompatible&format=image/jpeg" +
+  "&tilematrix={z}&tilerow={y}&tilecol={x}",
+  { maxZoom: 18, attribution: "© EOX IT Services GmbH (Sentinel-2 Cloudless)" }
+);
+
+const esriTopo = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 19, attribution: "Esri — World Topo" }
+);
+
+const openTopo = L.tileLayer(
+  "https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png",
+  { maxZoom: 17, attribution: "© OpenTopoMap (CC-BY-SA)" }
+);
+
+const stamenTerrain = L.tileLayer(
+  "https://stamen-tiles.a.ssl.fastly.net/terrain/{z}/{x}/{y}.jpg",
+  { maxZoom: 18, attribution: "Stamen Terrain" }
+);
+
+const esriImagery = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 20, attribution: "Esri — World Imagery" }
+);
+
+/* ---------- OVERLAYS ---------- */
+const esriHillshade = L.tileLayer(
+  "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 20, attribution: "Esri — World Hillshade" }
+);
+
+const shadedRelief = L.tileLayer(
+  "https://basemap.nationalmap.gov/arcgis/rest/services/USGSShadedReliefOnly/MapServer/tile/{z}/{y}/{x}",
+  { maxZoom: 16, attribution: "USGS Shaded Relief" }
+);
+
+/* ---------- DEFAULT ---------- */
+osm.addTo(map);
+
+/* ---------- LAYER CONTROL ---------- */
+L.control.layers(
+  {
+    "OpenStreetMap": osm,
+    "ESRI Topo": esriTopo,
+    "OpenTopoMap": openTopo,
+    "Stamen Terrain": stamenTerrain,
+    "Sentinel-2": sentinel,
+    "ESRI Imagery": esriImagery
+  },
+  {
+    "Hillshade (ESRI)": esriHillshade,
+    "USGS Shaded Relief": shadedRelief
+  },
+  { position: "topright", collapsed: true }
 ).addTo(map);
 
+/* ===================== DRAWN LAYERS ===================== */
 const drawnLayers = L.featureGroup().addTo(map);
 
 /* ===================== GEOMAN ===================== */
@@ -85,7 +147,6 @@ map.pm.addControls({
   removalMode: true
 });
 
-// hide blue preview marker
 map.pm.setGlobalOptions({
   markerStyle: {
     icon: L.divIcon({ className: "pm-hidden-marker" })
@@ -125,7 +186,6 @@ async function loadMarkers() {
 
   markers.forEach(m => {
     markerMap[m.id] = m;
-
     const opt = document.createElement("option");
     opt.value = m.id;
     opt.textContent = m.title;
@@ -141,11 +201,9 @@ async function loadMarkers() {
 map.on("pm:create", e => {
   const layer = e.layer;
 
-  // MARKER
   if (e.shape === "Marker") {
     const ll = layer.getLatLng();
     const m = markerMap[currentMarkerId];
-
     const coloredSvg = colorizeSvg(m.svg, currentColor);
 
     const icon = L.icon({
@@ -158,13 +216,10 @@ map.on("pm:create", e => {
 
     marker.feature = {
       type: "Feature",
-      geometry: {
-        type: "Point",
-        coordinates: [ll.lng, ll.lat]
-      },
+      geometry: { type: "Point", coordinates: [ll.lng, ll.lat] },
       properties: {
         markerId: m.id,
-        svg: m.svg,          // template
+        svg: m.svg,
         color: currentColor,
         size: m.size,
         anchor: m.anchor
@@ -176,13 +231,8 @@ map.on("pm:create", e => {
     return;
   }
 
-  // VECTORS
   if (layer.setStyle) {
-    layer.setStyle({
-      color: currentColor,
-      fillColor: currentColor
-    });
-
+    layer.setStyle({ color: currentColor, fillColor: currentColor });
     const geo = layer.toGeoJSON();
     geo.properties = geo.properties || {};
     geo.properties.color = currentColor;
@@ -196,12 +246,10 @@ map.on("pm:create", e => {
 exportBtn.onclick = () => {
   const features = [];
   drawnLayers.eachLayer(l => features.push(l.feature ?? l.toGeoJSON()));
-
   const blob = new Blob(
     [JSON.stringify({ type: "FeatureCollection", features }, null, 2)],
     { type: "application/json" }
   );
-
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
   a.download = "map.geojson";
@@ -219,11 +267,10 @@ importInput.onchange = e => {
     const geojson = JSON.parse(reader.result);
 
     geojson.features.forEach(f => {
-      // MARKER
       if (f.geometry.type === "Point" && f.properties?.svg) {
         const coloredSvg = colorizeSvg(
           f.properties.svg,
-          f.properties.color || "#000000"
+          f.properties.color || "#000"
         );
 
         const icon = L.icon({
@@ -238,22 +285,20 @@ importInput.onchange = e => {
         );
         marker.feature = f;
         drawnLayers.addLayer(marker);
-        return;
-      }
-
-      // VECTORS
-      L.geoJSON(f, {
-        onEachFeature: (feature, layer) => {
-          if (layer.setStyle && feature.properties?.color) {
-            layer.setStyle({
-              color: feature.properties.color,
-              fillColor: feature.properties.color
-            });
+      } else {
+        L.geoJSON(f, {
+          onEachFeature: (feature, layer) => {
+            if (layer.setStyle && feature.properties?.color) {
+              layer.setStyle({
+                color: feature.properties.color,
+                fillColor: feature.properties.color
+              });
+            }
+            layer.feature = feature;
+            drawnLayers.addLayer(layer);
           }
-          layer.feature = feature;
-          drawnLayers.addLayer(layer);
-        }
-      });
+        });
+      }
     });
   };
   reader.readAsText(file);
